@@ -1,4 +1,4 @@
-const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo seleccionado
+const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionado
 
 (async () => {
 
@@ -40,6 +40,136 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
             .trim()
             .toLowerCase()
             .replace(/\s+/g, " ");
+    }
+
+
+    // ============================================================
+    // NORMALIZAR PARA BÚSQUEDA APROXIMADA
+    // ============================================================
+
+    function normalizarBusqueda(texto) {
+
+        return normalizar(texto)
+            .replace(/[.,#]/g, " ")
+            .replace(/\s+/g, " ")
+            .trim();
+    }
+
+
+    // ============================================================
+    // DISTANCIA LEVENSHTEIN
+    // ============================================================
+
+    function distanciaLevenshtein(a, b) {
+
+        a = normalizarBusqueda(a);
+        b = normalizarBusqueda(b);
+
+        const matriz = Array.from(
+            { length: b.length + 1 },
+            () => new Array(a.length + 1)
+        );
+
+        for (let i = 0; i <= b.length; i++) {
+            matriz[i][0] = i;
+        }
+
+        for (let j = 0; j <= a.length; j++) {
+            matriz[0][j] = j;
+        }
+
+        for (let i = 1; i <= b.length; i++) {
+
+            for (let j = 1; j <= a.length; j++) {
+
+                const costo =
+                    b[i - 1] === a[j - 1]
+                        ? 0
+                        : 1;
+
+                matriz[i][j] = Math.min(
+                    matriz[i - 1][j] + 1,
+                    matriz[i][j - 1] + 1,
+                    matriz[i - 1][j - 1] + costo
+                );
+            }
+        }
+
+        return matriz[b.length][a.length];
+    }
+
+
+    // ============================================================
+    // CALCULAR SIMILITUD
+    //
+    // 1.00 = idéntico
+    // 0.00 = totalmente diferente
+    // ============================================================
+
+    function calcularSimilitud(a, b) {
+
+        a = normalizarBusqueda(a);
+        b = normalizarBusqueda(b);
+
+        if (!a || !b)
+            return 0;
+
+        if (a === b)
+            return 1;
+
+
+        // --------------------------------------------------------
+        // CASO IMPORTANTE:
+        //
+        // Buscado:
+        // 10 Poplar Trl
+        //
+        // Canva:
+        // 10 Poplar
+        //
+        // Uno contiene al otro, así que se considera
+        // una coincidencia bastante fuerte.
+        // --------------------------------------------------------
+
+        if (
+            a.includes(b) ||
+            b.includes(a)
+        ) {
+
+            const menor =
+                Math.min(
+                    a.length,
+                    b.length
+                );
+
+            const mayor =
+                Math.max(
+                    a.length,
+                    b.length
+                );
+
+            return (
+                0.85 +
+                (0.15 * (menor / mayor))
+            );
+        }
+
+
+        const distancia =
+            distanciaLevenshtein(a, b);
+
+
+        const longitudMax =
+            Math.max(
+                a.length,
+                b.length
+            );
+
+
+        return (
+            1 -
+            (distancia / longitudMax)
+        );
     }
 
 
@@ -1131,7 +1261,7 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
 
 
         // ========================================================
-        // COINCIDENCIA EXACTA
+        // 1. COINCIDENCIA EXACTA
         // ========================================================
 
         const exactas =
@@ -1170,10 +1300,10 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
 
 
         // ========================================================
-        // CONCORDANCIAS PARCIALES
+        // 2. CONCORDANCIAS NORMALES
         // ========================================================
 
-        const resultados =
+        let resultados =
             todos.filter(
                 item =>
 
@@ -1191,6 +1321,83 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
         );
 
 
+        // ========================================================
+        // 3. SI NO ENCUENTRA:
+        //    BUSCAR LAS MÁS PARECIDAS
+        // ========================================================
+
+        if (
+            resultados.length === 0
+        ) {
+
+            const aproximados =
+                todos
+                    .map(
+                        item => ({
+                            ...item,
+
+                            similitud:
+                                calcularSimilitud(
+                                    textoBuscado,
+                                    item.direccion
+                                )
+                        })
+                    )
+
+                    // Evitar resultados demasiado diferentes
+                    .filter(
+                        item =>
+                            item.similitud >= 0.60
+                    )
+
+                    // Más parecido primero
+                    .sort(
+                        (a, b) =>
+                            b.similitud -
+                            a.similitud
+                    );
+
+
+            if (
+                aproximados.length > 0
+            ) {
+
+                const mejorPuntaje =
+                    aproximados[0]
+                        .similitud;
+
+
+                /*
+                 * Solo mostramos resultados que estén
+                 * razonablemente cerca del mejor.
+                 */
+
+                resultados =
+                    aproximados
+                        .filter(
+                            item =>
+                                item.similitud >=
+                                mejorPuntaje - 0.12
+                        )
+                        .slice(0, 10);
+
+
+                console.log("");
+                console.log(
+                    "🔎 No hubo coincidencia textual exacta."
+                );
+
+                console.log(
+                    "👉 Mostrando las direcciones más parecidas:"
+                );
+            }
+        }
+
+
+        // ========================================================
+        // SIN RESULTADOS
+        // ========================================================
+
         if (
             resultados.length === 0
         ) {
@@ -1203,7 +1410,7 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
 
 
             console.log(
-                `❌ No se encontraron concordancias para "${textoBuscado}".`
+                `❌ No se encontraron direcciones similares a "${textoBuscado}".`
             );
 
 
@@ -1211,7 +1418,12 @@ const TIEMPO_RESALTADO = 20000; // segundos que se muestran subrayado lo selecci
         }
 
 
+        // ========================================================
+        // MOSTRAR RESULTADOS
+        // ========================================================
+
         console.log("");
+
         console.log(
             `✅ ${resultados.length} concordancia(s):`
         );

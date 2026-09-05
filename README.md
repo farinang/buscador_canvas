@@ -35,7 +35,7 @@ Mientras no se recargue la página, este escaneo no se vuelve a realizar. Si Can
 Después del escaneo, usar únicamente:
 
 ```javascript
-buscarDireccion("Spring St")
+b("Spring St")
 ```
 
 El buscador toma en cuenta el nombre completo de la tarjeta, por ejemplo:
@@ -52,7 +52,7 @@ El buscador toma en cuenta el nombre completo de la tarjeta, por ejemplo:
 Por ejemplo:
 
 ```javascript
-buscarDireccion("290 Spring St")
+b("290 Spring St")
 ```
 
 Si solo existe esa dirección, Canva se desplaza directamente hasta la tarjeta y la resalta durante un tiempo.
@@ -62,7 +62,7 @@ Si solo existe esa dirección, Canva se desplaza directamente hasta la tarjeta y
 Por ejemplo:
 
 ```javascript
-buscarDireccion("Spring St")
+b("Spring St")
 ```
 
 El programa muestra todas las coincidencias y aparece una pequeña pestaña **🔎** en el borde derecho de Canva. Al hacer clic en ella se despliega la lista de resultados.
@@ -193,19 +193,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
             return 1;
 
 
-        // --------------------------------------------------------
-        // CASO IMPORTANTE:
-        //
-        // Buscado:
-        // 10 Poplar Trl
-        //
-        // Canva:
-        // 10 Poplar
-        //
-        // Uno contiene al otro, así que se considera
-        // una coincidencia bastante fuerte.
-        // --------------------------------------------------------
-
         if (
             a.includes(b) ||
             b.includes(a)
@@ -270,60 +257,7 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
 
 
     // ============================================================
-    // IDENTIFICAR SCROLL DE CANVA
-    // ============================================================
-
-    function obtenerScrollCanva() {
-
-        const candidatos = [
-            ...document.querySelectorAll("*")
-        ].filter(el => {
-
-            if (!(el instanceof HTMLElement))
-                return false;
-
-            const estilo =
-                getComputedStyle(el);
-
-            const tieneScroll =
-                el.scrollHeight >
-                el.clientHeight + 150;
-
-            const overflowValido =
-                estilo.overflowY === "auto" ||
-                estilo.overflowY === "scroll";
-
-            return (
-                tieneScroll &&
-                overflowValido &&
-                el.clientHeight > 300 &&
-                el.clientWidth > 400
-            );
-        });
-
-
-        candidatos.sort(
-            (a, b) =>
-                (b.clientWidth * b.clientHeight) -
-                (a.clientWidth * a.clientHeight)
-        );
-
-
-        return candidatos[0] || null;
-    }
-
-
-    // ============================================================
     // OBTENER NOMBRE COMPLETO
-    //
-    // Ejemplo:
-    //
-    // 220 -
-    // 86 Linden Ave
-    //
-    // devuelve:
-    //
-    // 220 - 86 Linden Ave
     // ============================================================
 
     function obtenerNombreCompleto(elemento) {
@@ -364,6 +298,144 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
 
 
         return null;
+    }
+
+
+    // ============================================================
+    // ¿ES UN ELEMENTO REALMENTE DESPLAZABLE?
+    // ============================================================
+
+    function esScrollable(el) {
+
+        if (!(el instanceof HTMLElement))
+            return false;
+
+        if (
+            el === document.documentElement ||
+            el === document.body
+        ) {
+            return false;
+        }
+
+        const estilo =
+            getComputedStyle(el);
+
+        const overflowValido =
+            estilo.overflowY === "auto" ||
+            estilo.overflowY === "scroll";
+
+        const tieneScroll =
+            el.scrollHeight >
+            el.clientHeight + 50;
+
+        // Umbrales relativos a la ventana en vez de píxeles fijos,
+        // para que funcione igual en pantallas de 15" o 17".
+        const tamanoRazonable =
+            el.clientHeight > window.innerHeight * 0.25 &&
+            el.clientWidth > window.innerWidth * 0.15;
+
+        return (
+            overflowValido &&
+            tieneScroll &&
+            tamanoRazonable
+        );
+    }
+
+
+    // ============================================================
+    // IDENTIFICAR SCROLL DE CANVA
+    //
+    // ESTRATEGIA NUEVA (independiente del tamaño de pantalla):
+    // en vez de adivinar el contenedor por tamaño en píxeles,
+    // localizamos primero textos que YA parecen tarjetas
+    // ("123 - Dirección") y subimos por sus ancestros hasta
+    // encontrar el contenedor con scroll más cercano. El
+    // contenedor que aparece más veces es el correcto.
+    // ============================================================
+
+    function obtenerScrollCanva() {
+
+        const candidatosTexto = [
+            ...document.querySelectorAll("div, span, p")
+        ].filter(el => {
+
+            if (el.offsetParent === null)
+                return false;
+
+            if (el.children.length > 0)
+                return false;
+
+            const texto = el.innerText?.trim();
+
+            return (
+                !!texto &&
+                texto.length <= 160
+            );
+        });
+
+
+        const conteo = new Map();
+
+        for (const textoEl of candidatosTexto) {
+
+            const nombreCompleto =
+                obtenerNombreCompleto(textoEl);
+
+            if (!nombreCompleto)
+                continue;
+
+            let actual =
+                textoEl.parentElement;
+
+            let saltos = 0;
+
+            while (actual && saltos < 14) {
+
+                if (esScrollable(actual)) {
+
+                    conteo.set(
+                        actual,
+                        (conteo.get(actual) || 0) + 1
+                    );
+
+                    break;
+                }
+
+                actual = actual.parentElement;
+                saltos++;
+            }
+        }
+
+        if (conteo.size > 0) {
+
+            const ordenado = [
+                ...conteo.entries()
+            ].sort(
+                (a, b) => b[1] - a[1]
+            );
+
+            return ordenado[0][0];
+        }
+
+
+        // ------------------------------------------------------
+        // RESPALDO: si por alguna razón todavía no hay ninguna
+        // tarjeta renderizada (p.ej. la página aún está cargando),
+        // usamos el heurístico anterior pero con umbrales relativos
+        // a la ventana, no fijos en píxeles.
+        // ------------------------------------------------------
+
+        const candidatosScroll = [
+            ...document.querySelectorAll("*")
+        ].filter(esScrollable);
+
+        candidatosScroll.sort(
+            (a, b) =>
+                (b.clientWidth * b.clientHeight) -
+                (a.clientWidth * a.clientHeight)
+        );
+
+        return candidatosScroll[0] || null;
     }
 
 
@@ -517,14 +589,37 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         }
 
 
-        const contenedor =
+        // Damos un pequeño margen para que Canva termine de
+        // renderizar antes de buscar el contenedor (ayuda en
+        // computadoras más lentas o pantallas distintas).
+        await esperar(400);
+
+
+        let contenedor =
             obtenerScrollCanva();
+
+
+        if (!contenedor) {
+
+            // Reintento: a veces las primeras tarjetas tardan
+            // un poco más en aparecer en equipos distintos.
+            await esperar(800);
+
+            contenedor =
+                obtenerScrollCanva();
+        }
 
 
         if (!contenedor) {
 
             console.log(
                 "❌ No pude identificar el scroll de Canva."
+            );
+
+            console.log(
+                "👉 Prueba: 1) hacer clic dentro del panel de tarjetas, " +
+                "2) esperar a que carguen algunas tarjetas, y volver a ejecutar el script. " +
+                "También puedes ejecutar canvaDebugScroll() para inspeccionar candidatos."
             );
 
             return false;
@@ -677,7 +772,7 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
 
         console.log("");
         console.log(
-            '🔎 Ya puedes usar buscarDireccion("texto")'
+            '🔎 Ya puedes usar b("texto")'
         );
 
 
@@ -1011,10 +1106,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         );
 
 
-        // ========================================================
-        // PESTAÑA
-        // ========================================================
-
         const pestana =
             document.createElement(
                 "button"
@@ -1062,10 +1153,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
             }
         );
 
-
-        // ========================================================
-        // CONTENIDO
-        // ========================================================
 
         const contenido =
             document.createElement(
@@ -1136,10 +1223,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
             titulo
         );
 
-
-        // ========================================================
-        // BOTONES
-        // ========================================================
 
         resultados.forEach(
             (resultado, indice) => {
@@ -1224,10 +1307,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         );
 
 
-        // ========================================================
-        // ABRIR / CERRAR
-        // ========================================================
-
         pestana.onclick =
             () => {
 
@@ -1277,7 +1356,7 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
     // FUNCIÓN PRINCIPAL DEL USUARIO
     // ============================================================
 
-    window.buscarDireccion =
+    window.b =
         async function (
             textoBuscado
         ) {
@@ -1335,10 +1414,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         ];
 
 
-        // ========================================================
-        // 1. COINCIDENCIA EXACTA
-        // ========================================================
-
         const exactas =
             todos.filter(
                 item =>
@@ -1374,10 +1449,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         }
 
 
-        // ========================================================
-        // 2. CONCORDANCIAS NORMALES
-        // ========================================================
-
         let resultados =
             todos.filter(
                 item =>
@@ -1395,11 +1466,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
                 a.numero - b.numero
         );
 
-
-        // ========================================================
-        // 3. SI NO ENCUENTRA:
-        //    BUSCAR LAS MÁS PARECIDAS
-        // ========================================================
 
         if (
             resultados.length === 0
@@ -1419,13 +1485,11 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
                         })
                     )
 
-                    // Evitar resultados demasiado diferentes
                     .filter(
                         item =>
                             item.similitud >= 0.60
                     )
 
-                    // Más parecido primero
                     .sort(
                         (a, b) =>
                             b.similitud -
@@ -1441,11 +1505,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
                     aproximados[0]
                         .similitud;
 
-
-                /*
-                 * Solo mostramos resultados que estén
-                 * razonablemente cerca del mejor.
-                 */
 
                 resultados =
                     aproximados
@@ -1469,10 +1528,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
         }
 
 
-        // ========================================================
-        // SIN RESULTADOS
-        // ========================================================
-
         if (
             resultados.length === 0
         ) {
@@ -1492,10 +1547,6 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
             return [];
         }
 
-
-        // ========================================================
-        // MOSTRAR RESULTADOS
-        // ========================================================
 
         console.log("");
 
@@ -1521,6 +1572,45 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
 
         return resultados;
     };
+
+
+    // ============================================================
+    // HERRAMIENTA DE DIAGNÓSTICO
+    //
+    // Si en alguna computadora vuelve a fallar la detección,
+    // ejecuta canvaDebugScroll() en la consola para ver qué
+    // contenedor(es) está detectando como candidatos a scroll.
+    // ============================================================
+
+    window.canvaDebugScroll =
+        function () {
+
+            const contenedor =
+                obtenerScrollCanva();
+
+            if (!contenedor) {
+
+                console.log(
+                    "❌ No se detectó ningún contenedor con scroll."
+                );
+
+                return null;
+            }
+
+            console.log(
+                "✅ Contenedor detectado:",
+                contenedor
+            );
+
+            console.log({
+                clientWidth: contenedor.clientWidth,
+                clientHeight: contenedor.clientHeight,
+                scrollHeight: contenedor.scrollHeight,
+                overflowY: getComputedStyle(contenedor).overflowY
+            });
+
+            return contenedor;
+        };
 
 
     // ============================================================
@@ -1555,7 +1645,7 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
     // ============================================================
 
     console.log(
-        "✅ Buscador de Canva instalado."
+        "✅ Buscador de Canva instalado (v2 - detección por contenido)."
     );
 
 
@@ -1580,7 +1670,11 @@ const TIEMPO_RESALTADO = 20000; // tiempo que permanece resaltado lo seleccionad
     );
 
     console.log(
-        'buscarDireccion("dirección")'
+        'b("dirección")'
+    );
+
+    console.log(
+        "🩺 Si falla en alguna PC: canvaDebugScroll()"
     );
 
 })();
